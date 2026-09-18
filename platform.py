@@ -102,6 +102,14 @@ COMMON_IDF_PACKAGES = [
     "tool-esp-rom-elfs"
 ]
 
+# Packages the running PlatformIO core installs and executes from itself.
+# Their "package-version" is a floor rather than an exact pin: the core resolves
+# the version it requires, and that directory backs the build currently running,
+# so a newer installation is used in place instead of being removed.
+CORE_SHARED_PACKAGES = frozenset([
+    "tool-scons"
+])
+
 CHECK_PACKAGES = [
     "tool-cppcheck",
     "tool-clangtidy",
@@ -258,6 +266,16 @@ def safe_copy_directory(src: Union[str, Path], dst: Union[str, Path]) -> bool:
     shutil.copytree(src, dst, dirs_exist_ok=True, copy_function=shutil.copy2, symlinks=True)
     logger.debug(f"Directory copied: {src} -> {dst}")
     return True
+
+
+def version_tuple(version: str) -> tuple:
+    """Split a numeric package version into comparable components, () if unparsable."""
+    parts = []
+    for part in str(version).split("."):
+        if not part.isdigit():
+            return ()
+        parts.append(int(part))
+    return tuple(parts)
 
 
 class Espressif32Platform(PlatformBase):
@@ -515,10 +533,13 @@ class Espressif32Platform(PlatformBase):
             return False
 
     def _check_tool_version(self, tool_name: str) -> bool:
-        """Check if the installed tool version matches the required version."""
-        # Clean up versioned directories before version checks to prevent conflicts
-        self._cleanup_versioned_tool_directories(tool_name)
-        
+        """Check if the installed tool version satisfies the required version."""
+        core_shared = tool_name in CORE_SHARED_PACKAGES
+
+        if not core_shared:
+            # Clean up versioned directories before version checks to prevent conflicts
+            self._cleanup_versioned_tool_directories(tool_name)
+
         paths = self._get_tool_paths(tool_name)
 
         try:
@@ -535,6 +556,16 @@ class Espressif32Platform(PlatformBase):
             if not installed_version:
                 logger.warning(f"Installed version for {tool_name} unknown")
                 return False
+
+            if core_shared:
+                installed_parts = version_tuple(installed_version)
+                required_parts = version_tuple(required_version)
+                if installed_parts and required_parts and installed_parts >= required_parts:
+                    logger.debug(
+                        f"Tool {tool_name} version {installed_version} satisfies "
+                        f"minimum {required_version}"
+                    )
+                    return True
 
             version_match = required_version == installed_version
             if not version_match:
